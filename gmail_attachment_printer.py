@@ -61,6 +61,11 @@ class QueueLogHandler(logging.Handler):
 
 
 def load_settings() -> dict[str, str]:
+    if not SETTINGS_FILE.exists():
+        LOG.info("No settings.json found; creating it with default settings.")
+        defaults = DEFAULT_SETTINGS.copy()
+        save_settings(defaults)
+        return defaults
     try:
         with SETTINGS_FILE.open("r", encoding="utf-8") as file:
             raw = json.load(file)

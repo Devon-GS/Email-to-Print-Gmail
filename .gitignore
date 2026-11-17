@@ -1,3 +1,8 @@
+# Gmail OAuth credentials and local application state
+credentials.json
+token.json
+settings.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

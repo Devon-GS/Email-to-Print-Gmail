@@ -31,6 +31,7 @@ TOKEN_FILE = BASE_DIR / "token.json"
 SETTINGS_FILE = BASE_DIR / "settings.json"
 SAVED_ATTACHMENTS_DIR = BASE_DIR / "attachments"
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".docx"}
+OPTIONAL_EXTENSIONS = (".png", ".jpg", ".jpeg")
 WINDOWS_PRINT_CLEANUP_DELAY = 10 * 60  # Windows print verbs are asynchronous.
 CHECK_OPTIONS: dict[str, int] = {
     "Disabled (never checks)": 0,
@@ -49,6 +50,7 @@ DEFAULT_SETTINGS = {
     "operating_system": "Windows",
     "check_interval": "Disabled (never checks)",
     "dont_save_file": True,
+    "include_extensions": [],
 }
 LOG = logging.getLogger("gmail_attachment_printer")
 
@@ -67,7 +69,7 @@ class QueueLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def load_settings() -> dict[str, str]:
+def load_settings() -> dict[str, Any]:
     if not SETTINGS_FILE.exists():
         LOG.info("No settings.json found; creating it with default settings.")
         defaults = DEFAULT_SETTINGS.copy()
@@ -83,13 +85,17 @@ def load_settings() -> dict[str, str]:
             result["check_interval"] = raw["check_interval"]
         if isinstance(raw.get("dont_save_file"), bool):
             result["dont_save_file"] = raw["dont_save_file"]
+        if isinstance(raw.get("include_extensions"), list):
+            result["include_extensions"] = [
+                extension for extension in raw["include_extensions"] if extension in OPTIONAL_EXTENSIONS
+            ]
         return result
     except (OSError, json.JSONDecodeError, AttributeError):
         LOG.warning("Could not read settings.json; using defaults.")
         return DEFAULT_SETTINGS.copy()
 
 
-def save_settings(settings: dict[str, str]) -> None:
+def save_settings(settings: dict[str, Any]) -> None:
     temporary = SETTINGS_FILE.with_suffix(".tmp")
     try:
         with temporary.open("w", encoding="utf-8") as file:
@@ -253,7 +259,9 @@ class GmailPrinter:
     def __init__(self, log: logging.Logger) -> None:
         self.log = log
 
-    def check_once(self, selected_os: str, dont_save_file: bool) -> None:
+    def check_once(
+        self, selected_os: str, dont_save_file: bool, include_extensions: set[str]
+    ) -> None:
         service = gmail_service()
         page_token: str | None = None
         found = 0
@@ -264,7 +272,9 @@ class GmailPrinter:
             ).execute()
             for item in response.get("messages", []):
                 found += 1
-                if self._process_message(service, item["id"], selected_os, dont_save_file):
+                if self._process_message(
+                    service, item["id"], selected_os, dont_save_file, include_extensions
+                ):
                     printed += 1
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -272,14 +282,22 @@ class GmailPrinter:
         self.log.info("Check complete: %d unread message(s), %d marked read.", found, printed)
 
     def _process_message(
-        self, service: Any, message_id: str, selected_os: str, dont_save_file: bool
+        self,
+        service: Any,
+        message_id: str,
+        selected_os: str,
+        dont_save_file: bool,
+        include_extensions: set[str],
     ) -> bool:
         message = service.users().messages().get(userId="me", id=message_id, format="full").execute()
         sender = header(message, "From")
         subject = header(message, "Subject")
         self.log.info("Found email from %s: %s", sender, subject)
         parts = [part for part in iter_parts(message.get("payload", {})) if part.get("filename")]
-        eligible = [part for part in parts if Path(part["filename"]).suffix.lower() in ALLOWED_EXTENSIONS]
+        included_extensions = {".pdf", ".docx"} | include_extensions
+        eligible = [
+            part for part in parts if Path(part["filename"]).suffix.lower() in included_extensions
+        ]
         if not eligible:
             self.log.info("No allowed attachments in message %s; leaving it unread.", message_id)
             return False
@@ -356,7 +374,7 @@ class Application(tk.Tk):
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(4, weight=1)
+        frame.rowconfigure(6, weight=1)
 
         ttk.Label(frame, text="Operating system:").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
         self.os_var = tk.StringVar(value=self.settings["operating_system"])
@@ -381,17 +399,34 @@ class Application(tk.Tk):
         )
         dont_save.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        ttk.Label(frame, text="Allowed files: " + ", ".join(sorted(ALLOWED_EXTENSIONS))).grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(4, 8)
+        ttk.Label(frame, text="Include following").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(8, 2)
+        )
+        self.include_vars = {
+            extension: tk.BooleanVar(value=extension in self.settings["include_extensions"])
+            for extension in OPTIONAL_EXTENSIONS
+        }
+        include_frame = ttk.Frame(frame)
+        include_frame.grid(row=4, column=0, columnspan=2, sticky="w")
+        for extension in OPTIONAL_EXTENSIONS:
+            ttk.Checkbutton(
+                include_frame,
+                text=extension,
+                variable=self.include_vars[extension],
+                command=self._settings_changed,
+            ).pack(side="left", padx=(0, 12))
+
+        ttk.Label(frame, text="Always included: .pdf, .docx").grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(4, 8)
         )
         self.log_text = tk.Text(frame, state="disabled", wrap="word", height=15)
-        self.log_text.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.log_text.grid(row=6, column=0, columnspan=2, sticky="nsew")
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.log_text.yview)
-        scrollbar.grid(row=4, column=2, sticky="ns")
+        scrollbar.grid(row=6, column=2, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
         self.check_button = ttk.Button(frame, text="Check Gmail now", command=self.manual_check)
-        self.check_button.grid(row=5, column=0, columnspan=3, pady=(12, 0), ipadx=10, ipady=4)
+        self.check_button.grid(row=7, column=0, columnspan=3, pady=(12, 0), ipadx=10, ipady=4)
 
     def _configure_logging(self) -> None:
         handler = QueueLogHandler(self.log_messages)
@@ -412,6 +447,9 @@ class Application(tk.Tk):
             "operating_system": self.os_var.get(),
             "check_interval": self.interval_var.get(),
             "dont_save_file": self.dont_save_var.get(),
+            "include_extensions": [
+                extension for extension, variable in self.include_vars.items() if variable.get()
+            ],
         }
         save_settings(self.settings)
         self.next_auto_check = time.monotonic() + CHECK_OPTIONS[self.interval_var.get()]
@@ -431,14 +469,21 @@ class Application(tk.Tk):
             return
         selected_os = self.os_var.get()
         dont_save_file = self.dont_save_var.get()
+        include_extensions = {
+            extension for extension, variable in self.include_vars.items() if variable.get()
+        }
         LOG.info("Starting %s Gmail check...", source)
         self.check_button.configure(state="disabled")
-        self.active_future = self.executor.submit(self._run_check, selected_os, dont_save_file)
+        self.active_future = self.executor.submit(
+            self._run_check, selected_os, dont_save_file, include_extensions
+        )
         self.active_future.add_done_callback(self._check_finished)
 
-    def _run_check(self, selected_os: str, dont_save_file: bool) -> None:
+    def _run_check(
+        self, selected_os: str, dont_save_file: bool, include_extensions: set[str]
+    ) -> None:
         try:
-            GmailPrinter(LOG).check_once(selected_os, dont_save_file)
+            GmailPrinter(LOG).check_once(selected_os, dont_save_file, include_extensions)
         except Exception:
             LOG.exception("Gmail check failed.")
 

@@ -24,8 +24,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 
+if getattr(sys, "frozen", False):
+    # Running as a PyInstaller bundle: look next to the .exe
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    # Running as a normal Python script
+    BASE_DIR = Path(__file__).resolve().parent
+
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-BASE_DIR = Path(__file__).resolve().parent
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 SETTINGS_FILE = BASE_DIR / "settings.json"

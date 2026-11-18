@@ -380,7 +380,10 @@ class Application(tk.Tk):
         self.os_var = tk.StringVar(value=self.settings["operating_system"])
         os_menu = ttk.Combobox(frame, textvariable=self.os_var, values=OS_OPTIONS, state="readonly", width=18)
         os_menu.grid(row=0, column=1, sticky="w", pady=4)
-        os_menu.bind("<<ComboboxSelected>>", self._settings_changed)
+        os_menu.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._settings_changed("Operating system"),
+        )
 
         ttk.Label(frame, text="Automatic check interval:").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
         self.interval_var = tk.StringVar(value=self.settings["check_interval"])
@@ -388,14 +391,17 @@ class Application(tk.Tk):
             frame, textvariable=self.interval_var, values=list(CHECK_OPTIONS), state="readonly", width=24
         )
         interval_menu.grid(row=1, column=1, sticky="w", pady=4)
-        interval_menu.bind("<<ComboboxSelected>>", self._settings_changed)
+        interval_menu.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._settings_changed("Check interval"),
+        )
 
         self.dont_save_var = tk.BooleanVar(value=self.settings["dont_save_file"])
         dont_save = ttk.Checkbutton(
             frame,
             text="Don't save file",
             variable=self.dont_save_var,
-            command=self._settings_changed,
+            command=lambda: self._settings_changed("Don't save file"),
         )
         dont_save.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
@@ -413,7 +419,9 @@ class Application(tk.Tk):
                 include_frame,
                 text=extension,
                 variable=self.include_vars[extension],
-                command=self._settings_changed,
+                command=lambda extension=extension: self._settings_changed(
+                    f"Include {extension}"
+                ),
             ).pack(side="left", padx=(0, 12))
 
         ttk.Label(frame, text="Always included: .pdf, .docx").grid(
@@ -442,7 +450,7 @@ class Application(tk.Tk):
         if not CREDENTIALS_FILE.is_file():
             LOG.warning("credentials.json is missing; add it beside this script before checking Gmail.")
 
-    def _settings_changed(self, _event: object = None) -> None:
+    def _settings_changed(self, setting_name: str) -> None:
         self.settings = {
             "operating_system": self.os_var.get(),
             "check_interval": self.interval_var.get(),
@@ -453,7 +461,16 @@ class Application(tk.Tk):
         }
         save_settings(self.settings)
         self.next_auto_check = time.monotonic() + CHECK_OPTIONS[self.interval_var.get()]
-        LOG.info("Settings saved: %s, %s", self.os_var.get(), self.interval_var.get())
+        values = {
+            "Operating system": self.os_var.get(),
+            "Check interval": self.interval_var.get(),
+            "Don't save file": self.dont_save_var.get(),
+            **{
+                f"Include {extension}": variable.get()
+                for extension, variable in self.include_vars.items()
+            },
+        }
+        LOG.info("Setting saved: %s = %s", setting_name, values[setting_name])
 
     def _timer_tick(self) -> None:
         if not self.closed:
